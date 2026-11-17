@@ -22,3 +22,11 @@ Names
   "KoriyoSCAN" and the app icon are not licensed for use as your own product
   name or logo (Apache License 2.0, section 6). Product and company names that
   appear in the code describe observed signals and do not imply endorsement.
+
+Optional inspection tools
+  Apache Commons Math 3.6.1 (Apache License 2.0) supplies the FFT.
+  Its full upstream LICENSE and NOTICE, including third-party notices, are
+  retained in app/src/main/assets/licenses/commons-math3/.
+  AndroidX CameraX 1.4.2 (Apache License 2.0) supplies camera preview and analysis.
+  See app/src/main/assets/licenses/camerax/NOTICE.txt and the packaged
+  Apache License 2.0 above.

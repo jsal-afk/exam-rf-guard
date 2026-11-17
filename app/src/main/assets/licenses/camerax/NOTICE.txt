@@ -1,0 +1,9 @@
+AndroidX CameraX 1.4.2
+
+Components: camera-camera2, camera-core, camera-lifecycle, camera-view
+Project: The Android Open Source Project
+Source: https://android.googlesource.com/platform/frameworks/support/+/androidx-camera-release/camera/
+License: Apache License, Version 2.0. The full license text is included in
+../commons-math3/LICENSE.txt.
+
+License metadata: https://dl.google.com/dl/android/maven2/androidx/camera/camera-view/1.4.2/camera-view-1.4.2.pom

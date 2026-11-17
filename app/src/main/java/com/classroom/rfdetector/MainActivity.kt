@@ -28,6 +28,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.classroom.rfdetector.ui.*
+import com.classroom.rfdetector.inspection.InspectionTools
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,7 +39,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 화면은 셋뿐이다: 감독관 화면, 한 전파의 위치 찾기, 안내. */
+/** 기본 감독 화면과 선택한 도구만 띄운다. 추가 센서는 각 도구에서 따로 시작한다. */
 @Composable
 fun App() {
     val context = LocalContext.current
@@ -48,6 +49,7 @@ fun App() {
     })[AppViewModel::class.java] }
     val lifecycle = (context as ComponentActivity).lifecycle
     var guide by rememberSaveable { mutableStateOf(false) }
+    var inspection by rememberSaveable { mutableStateOf(false) }
     var findKey by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingStart by remember { mutableStateOf(false) }
     val needed = remember { vm.requiredPermissions() }
@@ -83,19 +85,27 @@ fun App() {
         else { pendingStart = true; launcher.launch(needed.toTypedArray()) }
     }
     val closeFind = { vm.findTarget.value = null; vm.setGeiger(false); findKey = null }
-    BackHandler(enabled = guide || findKey != null) { if (findKey != null) closeFind() else guide = false }
+    BackHandler(enabled = inspection || guide || findKey != null) {
+        if (inspection) inspection = false else if (findKey != null) closeFind() else guide = false
+    }
 
     Surface(Modifier.fillMaxSize(), color = RfColors.bg) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                val sub = guide || findKey != null
-                if (sub) TextButton(onClick = { if (findKey != null) closeFind() else guide = false }, modifier = Modifier.semantics { contentDescription = "돌아가기" }) { Text("‹", style = MaterialTheme.typography.headlineLarge) }
-                Text(if (findKey != null) "위치 찾기" else if (guide) "안내" else "KoriyoSCAN", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                if (!sub) TextButton(onClick = { guide = true }) { Text("안내") }
+                val sub = inspection || guide || findKey != null
+                if (sub) TextButton(onClick = { if (inspection) inspection = false else if (findKey != null) closeFind() else guide = false }, modifier = Modifier.semantics { contentDescription = "돌아가기" }) { Text("‹", style = MaterialTheme.typography.headlineLarge) }
+                Text(if (inspection) "추가 확인 (실험)" else if (findKey != null) "위치 찾기" else if (guide) "안내" else "KoriyoSCAN", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                if (!sub) {
+                    TextButton(onClick = { guide = true }) { Text("안내") }
+                }
+            }
+            if (!inspection && !guide && findKey == null) {
+                TextButton(onClick = { inspection = true }, modifier = Modifier.align(Alignment.End).padding(end = 8.dp)) { Text("추가 확인") }
             }
             Box(Modifier.weight(1f)) {
                 val key = findKey
                 when {
+                    inspection -> InspectionTools(vm)
                     key != null -> FindScreen(vm, key, onBack = { findKey = null })
                     guide -> GuideScreen()
                     else -> GuardScreen(vm, !allGranted, start, { launcher.launch(needed.toTypedArray()) }, openSettings, onFind = { findKey = it })
