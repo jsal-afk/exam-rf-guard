@@ -1,5 +1,10 @@
 # 변경 기록
 
+## 미출시
+
+- 기본 감시 중 선택한 전파의 다섯 곳 수신 세기와 이동 중 상대 변화를 비교할 수 있습니다. 단일 와이파이 결과는 잠정값이며 정확한 위치를 나타내지 않습니다.
+- Keep current new-signal warnings visible during comparison and retain up to 50 warning-group representatives for review in the current session. Comparison follows the build's existing debug/release preparation policy.
+
 ## 1.0.0
 
 첫 공개판입니다.
