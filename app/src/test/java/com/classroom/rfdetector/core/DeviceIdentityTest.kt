@@ -19,6 +19,17 @@ class DeviceIdentityTest {
         assertNull(identity.macOrganization)
     }
 
+    @Test fun onlyExplicitPublicBleAddressesCanClaimRegisteredOrganization() {
+        for (type in listOf(BleAddressType.UNKNOWN, BleAddressType.RANDOM, BleAddressType.ANONYMOUS)) {
+            val identity = resolver.resolve("00:11:22:33:44:55", "AirPods Pro", setOf(ScanSource.BLE), setOf(76), type)
+            assertNull(identity.macOrganization)
+            assertEquals(listOf("Apple, Inc."), identity.advertisedCompanies)
+            assertNotNull(identity.audioNameMatch)
+        }
+        assertEquals("Registered Vendor", resolver.resolve("00:11:22:33:44:55", null, setOf(ScanSource.BLE), emptySet(), BleAddressType.PUBLIC).macOrganization)
+        assertNull(resolver.resolve("00:11:22:33:44:55", null, setOf(ScanSource.BLE), emptySet()).macOrganization)
+    }
+
     @Test fun nameMatchComesFromSpecificBleNameNotMacOrWifiSsid() {
         assertNull(resolver.resolve("00:11:22:33:44:55", null, setOf(ScanSource.BLE), setOf(76)).audioNameMatch)
         assertNull(resolver.resolve("00:11:22:33:44:55", "AirPods Pro", setOf(ScanSource.WIFI), emptySet()).audioNameMatch)

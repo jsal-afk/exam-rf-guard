@@ -7,6 +7,7 @@ import android.net.wifi.WifiManager
 import android.os.Looper
 import android.os.SystemClock
 import com.classroom.rfdetector.core.RfObservation
+import com.classroom.rfdetector.core.ScanState
 import java.time.Duration
 import kotlinx.coroutines.*
 import org.junit.After
@@ -16,6 +17,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowWifiManager
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSystemClock
 
@@ -29,6 +33,96 @@ class WifiScannerTest {
     private val observations = mutableListOf<RfObservation>()
 
     @After fun close() { scanner.stop(); scope.cancel() }
+
+    @Test fun healthDistinguishesFailedAndEmptyCompletions() {
+        shadowOf(manager).setScanResults(emptyList())
+        assertEquals(ScanState.STOPPED, scanner.health(System.currentTimeMillis()).state)
+        scanner.start(onObs = { observations.add(it) })
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        complete(false)
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        assertNull(scanner.health(System.currentTimeMillis()).lastObservedAtMs)
+        complete()
+        assertEquals(ScanState.COMPLETED, scanner.health(System.currentTimeMillis()).state)
+        assertNotNull(scanner.health(System.currentTimeMillis()).lastObservedAtMs)
+        assertTrue(observations.isEmpty())
+        complete(false)
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        assertNotNull(scanner.health(System.currentTimeMillis()).lastObservedAtMs)
+        scanner.stop()
+        assertEquals(ScanState.STOPPED, scanner.health(System.currentTimeMillis()).state)
+    }
+
+    @Test fun cachedOnlySuccessBroadcastDoesNotCountAsFreshOrEmptyMeasurement() {
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(2))
+        shadowOf(manager).setScanResults(listOf(result("old", "old", 1_000)))
+        scanner.start(onObs = { observations.add(it) })
+        complete()
+        assertEquals(0, scanner.completedScans)
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        assertTrue(observations.isEmpty())
+        shadowOf(manager).setScanResults(listOf(result("new", "new")))
+        complete()
+        assertEquals(1, scanner.completedScans)
+        complete()
+        assertEquals(1, scanner.completedScans)
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        shadowOf(manager).setScanResults(emptyList())
+        complete()
+        assertEquals(2, scanner.completedScans)
+        assertEquals(ScanState.COMPLETED, scanner.health(System.currentTimeMillis()).state)
+    }
+
+    @Test fun ssidWhitespaceAndCaseArePreserved() {
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(2))
+        shadowOf(manager).setScanResults(listOf(result("ap", "  My Network  ")))
+        scanner.start(onObs = { observations.add(it) })
+        complete()
+        assertEquals("  My Network  ", observations.single().name)
+        assertFalse(observations.single().hidden)
+    }
+
+    @Test fun rejectedRequestWaitsWithoutClaimingCompletion() {
+        shadowOf(manager).setStartScanSucceeds(false)
+        scanner.start(onObs = { observations.add(it) })
+        assertTrue(scanner.active)
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        assertEquals(0, scanner.completedScans)
+        assertNull(scanner.health(System.currentTimeMillis()).lastObservedAtMs)
+    }
+
+    @Test fun invalidRssiKeepsObservationWithoutSignalMeasurement() {
+        ShadowSystemClock.advanceBy(Duration.ofMinutes(2))
+        shadowOf(manager).setScanResults(listOf(result("ap", "network").apply { level = 127 }))
+        scanner.start(onObs = { observations.add(it) })
+        complete()
+        assertNull(observations.single().rssi)
+    }
+
+    @Test
+    @Config(shadows = [PermissionDeniedWifiManager::class])
+    fun permissionFailureStopsTheRequestEngine() {
+        PermissionDeniedWifiManager.calls = 0
+        scanner.start(onObs = { observations.add(it) })
+        assertFalse(scanner.active)
+        assertEquals(ScanState.ERROR, scanner.health(System.currentTimeMillis()).state)
+        assertNotNull(scanner.lastError)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(2))
+        assertEquals(1, PermissionDeniedWifiManager.calls)
+        complete()
+        assertEquals(0, scanner.completedScans)
+    }
+
+    @Implements(WifiManager::class)
+    class PermissionDeniedWifiManager : ShadowWifiManager() {
+        companion object { var calls = 0 }
+
+        @Implementation
+        override fun startScan(): Boolean {
+            calls++
+            throw SecurityException("denied")
+        }
+    }
 
     private fun result(address: String, ssid: String?, ageMs: Long = 0) = ScanResult().apply {
         BSSID = address

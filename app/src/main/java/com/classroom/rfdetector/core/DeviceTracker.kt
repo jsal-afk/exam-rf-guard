@@ -17,6 +17,7 @@ class DeviceTracker {
         var lastSeen = 0L
         var observationCount = 0
         var peakRssi: Int? = null
+        var addressType = BleAddressType.UNKNOWN
     }
 
     private val tracks = ConcurrentHashMap<String, Track>()
@@ -36,13 +37,19 @@ class DeviceTracker {
         t.manufacturerIds.addAll(obs.manufacturerIds)
         t.hints.addAll(obs.hints)
         if (!late) t.details.putAll(obs.details)
-        if (!late || t.name == null) obs.name?.takeIf { it.isNotBlank() }?.let { t.name = it }
-        if (!late) t.hidden = obs.hidden
-        obs.rssi?.let { r ->
-            if (!late) {
-                t.ema = RssiFilter.ema(if (t.periods.size > previousPeriodCount) null else t.ema, r)
-                t.tx = obs.txPower?.takeIf { it in -100..20 && it != 127 }?.toDouble() ?: t.tx
-            }
+        if (!late && obs.source == ScanSource.WIFI) {
+            t.name = obs.name?.takeIf { it.isNotEmpty() }
+        } else if (!late || t.name == null) {
+            obs.name?.takeIf { it.isNotBlank() }?.let { t.name = it }
+        }
+        if (!late) {
+            t.hidden = obs.hidden
+            t.addressType = obs.addressType
+            val r = obs.rssi?.takeIf { RssiFilter.isValid(it.toDouble()) }
+            t.ema = r?.let { RssiFilter.ema(if (t.periods.size > previousPeriodCount) null else t.ema, it) }
+            t.tx = obs.txPower?.takeIf { it in -100..20 }?.toDouble() ?: t.tx
+        }
+        obs.rssi?.takeIf { RssiFilter.isValid(it.toDouble()) }?.let { r ->
             t.peakRssi = maxOf(t.peakRssi ?: r, r)
         }
     }
@@ -51,7 +58,6 @@ class DeviceTracker {
     fun snapshot(nowMs: Long, includeInactive: Boolean = false): List<TrackedDevice> {
         return tracks.values.filter { includeInactive || nowMs - it.lastSeen <= 90_000L }.map { t ->
             val rssi = t.ema
-            val dist = rssi?.let { RssiFilter.distanceM(it, t.tx ?: RssiFilter.DEFAULT_TX_DBM) }
             val ageMs = (nowMs - t.lastSeen).coerceAtLeast(0)
             val presence = signalPresence(t.source, t.lastSeen, nowMs)
             TrackedDevice(
@@ -60,7 +66,7 @@ class DeviceTracker {
                 source = t.source,
                 hidden = t.hidden,
                 rssiEma = rssi,
-                distanceClass = RssiFilter.classify(dist),
+                distanceClass = RssiFilter.classifyRssi(rssi),
                 firstSeenMs = t.firstSeen,
                 lastSeenMs = t.lastSeen,
                 manufacturerIds = t.manufacturerIds.toSet(),
@@ -72,6 +78,7 @@ class DeviceTracker {
                 referenceRssiAt1m = t.tx,
                 hints = t.hints.toSet(),
                 details = t.details.toMap(),
+                addressType = t.addressType,
             )
         }.sortedWith(
             compareBy<TrackedDevice> { it.presence.ordinal }

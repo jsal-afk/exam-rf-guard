@@ -7,10 +7,10 @@ data class DistanceEstimate(val meters: Double) {
 }
 
 fun estimateDistance(rssi: Double?, referenceRssiAt1m: Double? = null): DistanceEstimate? {
-    if (rssi == null || !rssi.isFinite() || rssi !in -127.0..-1.0) return null
+    if (!RssiFilter.isValid(rssi)) return null
     val calibrated = referenceRssiAt1m?.takeIf { it.isFinite() && it in -100.0..20.0 }
     val reference = calibrated ?: RssiFilter.DEFAULT_TX_DBM
-    return DistanceEstimate(RssiFilter.distanceM(rssi, reference))
+    return DistanceEstimate(RssiFilter.distanceM(rssi!!, reference))
 }
 
 private fun formatMeters(value: Double): String = when {

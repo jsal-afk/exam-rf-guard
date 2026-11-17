@@ -1,5 +1,6 @@
 package com.classroom.rfdetector.scanner
 
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanRecord
 import android.bluetooth.le.ScanResult
@@ -8,6 +9,8 @@ import android.os.SystemClock
 import com.classroom.rfdetector.core.DeviceTracker
 import com.classroom.rfdetector.core.DistanceClass
 import com.classroom.rfdetector.core.RfObservation
+import com.classroom.rfdetector.core.ScanState
+import com.classroom.rfdetector.core.BleAddressType
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -25,6 +28,56 @@ import java.time.Duration
 @Config(sdk = [34])
 class BleScannerTest {
     @Before fun clockHasStarted() { ShadowSystemClock.advanceBy(Duration.ofSeconds(1)) }
+
+    @Test fun healthDistinguishesQuietReceptionFailureAndStop() {
+        val context = RuntimeEnvironment.getApplication()
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setEnabled(true)
+        val scanner = BleScanner(context)
+        assertEquals(ScanState.STOPPED, scanner.health(System.currentTimeMillis()).state)
+        scanner.start { }
+        val callback = shadowOf(adapter.bluetoothLeScanner).scanCallbacks.single()
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofSeconds(90))
+        assertSame(callback, shadowOf(adapter.bluetoothLeScanner).scanCallbacks.single())
+        assertEquals(ScanState.WAITING, scanner.health(System.currentTimeMillis()).state)
+        callback.onScanResult(1, ScanResult(adapter.getRemoteDevice("00:11:22:33:44:55"), null, -60, SystemClock.elapsedRealtimeNanos()))
+        assertEquals(ScanState.RECEIVING, scanner.health(System.currentTimeMillis()).state)
+        assertEquals(scanner.lastReceivedAtMs, scanner.health(System.currentTimeMillis()).lastObservedAtMs)
+        callback.onScanFailed(2)
+        assertEquals(ScanState.ERROR, scanner.health(System.currentTimeMillis()).state)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMinutes(5))
+        assertFalse(scanner.active)
+        scanner.stop()
+        assertEquals(ScanState.STOPPED, scanner.health(System.currentTimeMillis()).state)
+    }
+
+    @Test fun preApi35AddressTypeIsUnknown() {
+        val context = RuntimeEnvironment.getApplication()
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setEnabled(true)
+        val scanner = BleScanner(context)
+        val observations = mutableListOf<RfObservation>()
+        scanner.start { observations.add(it) }
+        shadowOf(adapter.bluetoothLeScanner).scanCallbacks.single().onScanResult(
+            1, ScanResult(adapter.getRemoteDevice("00:11:22:33:44:55"), null, -60, SystemClock.elapsedRealtimeNanos()))
+        assertEquals(BleAddressType.UNKNOWN, observations.single().addressType)
+        scanner.stop()
+    }
+
+    @Test fun invalidRssiKeepsObservationWithoutSignalMeasurement() {
+        val context = RuntimeEnvironment.getApplication()
+        val adapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
+        shadowOf(adapter).setEnabled(true)
+        val scanner = BleScanner(context)
+        val observations = mutableListOf<RfObservation>()
+        scanner.start { observations.add(it) }
+        shadowOf(adapter.bluetoothLeScanner).scanCallbacks.single().onScanResult(
+            1, ScanResult(adapter.getRemoteDevice("00:11:22:33:44:55"), null, 127, SystemClock.elapsedRealtimeNanos()))
+        assertNull(observations.single().rssi)
+        scanner.stop()
+    }
+
 
     @Test fun advertisementPreservesCompanyAndNameWithoutTreatingRadiatedPowerAsCalibration() {
         val context = RuntimeEnvironment.getApplication()
@@ -64,7 +117,7 @@ class BleScannerTest {
         callback.onScanResult(1, ScanResult(adapter.getRemoteDevice("00:11:22:33:44:55"), record, -59, SystemClock.elapsedRealtimeNanos()))
         assertEquals(setOf(com.classroom.rfdetector.core.SignalHint.WATCH, com.classroom.rfdetector.core.SignalHint.APPLE_ACTIVE), observations.single().hints)
 
-        // 실제 기기는 5분 뒤 탐색을 낮춘다. 그 전에 다시 걸리는지, 신호가 끊긴 채로도 계속 살아 있는지 본다.
+        // 주기 갱신 전후에도 콜백이 유지되고 중지 뒤에는 다시 시작하지 않는다.
         val scans = shadowOf(adapter.bluetoothLeScanner)
         shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofSeconds(20))
         assertSame(callback, scans.scanCallbacks.single())

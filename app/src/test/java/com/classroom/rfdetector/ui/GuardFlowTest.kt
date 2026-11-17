@@ -43,12 +43,15 @@ class GuardFlowTest {
         compose.onNodeWithText("빈 교실 측정 시작").assertIsDisplayed().performClick()
         compose.waitUntil(10_000) { vm.devices.value.size == 5 }
         compose.onNodeWithText("빈 교실 기록 저장").assertIsDisplayed().performClick()
-        waitForText("새 전파 없음")
+        compose.waitUntil(10_000) {
+            shadowOf(Looper.getMainLooper()).idle()
+            vm.baselineSet.value
+        }
     }
 
     private fun addEarbuds(vm: AppViewModel) {
         compose.runOnIdle { vm.simAddDevice(); shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(1)) }
-        waitForText("새 전파 1개 발견")
+        compose.waitUntil(10_000) { vm.watch.value.count == 1 }
     }
 
     @Test fun proctorRecordsEmptyRoomThenSeesAndLocatesNewSignal() {
@@ -59,19 +62,20 @@ class GuardFlowTest {
             saveScreen("guard-3-clear")
             addEarbuds(vm)
             saveScreen("guard-4-found")
+            compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("무선 이어폰"))
             compose.onNodeWithText("무선 이어폰").performClick()
-            compose.onNodeWithText("가까울수록 빠른 진동").assertExists()
-            compose.onNodeWithText("기기 정보").assertExists()
-            compose.onNodeWithText("주소").assertExists()
+            compose.onNodeWithText("기기 정보 보기").performClick()
+            compose.onNodeWithText("주소").assertIsDisplayed()
+            assertEquals(0, vm.acknowledged.value.size)
             saveScreen("guard-5-find")
             compose.onNodeWithText("목록으로").performClick()
             assertNull(vm.findTarget.value)
-            compose.onNodeWithText("감시 끝내기").performClick()
+            compose.onNodeWithContentDescription("감시 끝내기").performClick()
             compose.onNodeWithText("끝내기").performClick()
-            compose.onNodeWithText("감시를 끝냈습니다").assertExists()
+            assertTrue(!vm.scanning.value)
             saveScreen("guard-6-ended")
             compose.onNodeWithText("같은 빈 교실 기록으로 다시 감시").performClick()
-            waitForText("새 전파 없음")
+            compose.waitUntil(10_000) { vm.watch.value.count == 0 }
         } finally { vm.shutdown() }
     }
 
@@ -82,18 +86,19 @@ class GuardFlowTest {
             addEarbuds(vm)
             compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
             compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
-            compose.onNodeWithText("감시 끝내기").assertIsDisplayed()
-            compose.onNodeWithText("새 전파 1개 발견").assertExists()
-            compose.onNodeWithText("앱을 벗어나 있던 시간이 있습니다").assertExists()
+            compose.onNodeWithContentDescription("감시 끝내기").assertIsDisplayed()
+            assertEquals(1, vm.watch.value.count)
+            assertEquals(1, vm.scanSession.value!!.pauses)
 
+            compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("무선 이어폰"))
             compose.onNodeWithText("무선 이어폰").performClick()
-            compose.onNodeWithText("확인함\n목록에서 빼기").performClick()
-            waitForText("새 전파 없음")
+            compose.onNodeWithText("이 신호 확인함").performClick()
+            compose.waitUntil(10_000) { vm.watch.value.count == 0 }
             assertEquals(1, vm.acknowledged.value.size)
 
-            compose.onNodeWithText("빈 교실부터\n다시 측정").performClick()
-            compose.onNodeWithText("다시 측정").performClick()
-            waitForText("빈 교실 기록 저장") // 1단계 측정 화면으로 돌아왔다.
+            compose.onNodeWithContentDescription("빈 교실 다시 측정").performClick()
+            compose.onNode(hasText("다시 측정") and hasAnyAncestor(isDialog())).performClick()
+            compose.waitUntil(10_000) { !vm.baselineSet.value }
             assertNull(vm.baselineSnapshot.value)
             assertTrue(vm.acknowledged.value.isEmpty())
         } finally { vm.shutdown() }
@@ -103,28 +108,48 @@ class GuardFlowTest {
         val vm = launch()
         try {
             recordEmptyRoom(vm)
+            compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("원래 있던 전파 5종"))
             compose.onNodeWithText("원래 있던 전파 5종").performClick()
             compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("스마트워치 (가상)", substring = true))
             compose.onNodeWithText("스마트워치 (가상)", substring = true).performClick()
-            compose.onNodeWithText("빈 교실 기록에 있던 전파").assertExists()
-            compose.onNodeWithText("기기 정보").assertExists()
-            compose.onNodeWithText("확인함\n목록에서 빼기").assertDoesNotExist()
+            compose.onNodeWithText("이 신호 확인함").assertDoesNotExist()
             compose.onNodeWithText("목록으로").performClick()
-            compose.onNodeWithText("감시 끝내기").assertIsDisplayed()
+            compose.onNodeWithContentDescription("감시 끝내기").assertIsDisplayed()
         } finally { vm.shutdown() }
     }
 
-    @Test fun guideExplainsWhatTheAppCannotCatch() {
+    @Test fun supplementaryAndDisappearedObservationsCanBeOpened() {
         val vm = launch()
         try {
-            compose.onNodeWithText("안내").performClick()
-            compose.onNodeWithText("이 앱이 못 잡는 것").assertExists()
-            compose.onNodeWithText("제대로 잡히는지 확인하기").assertExists()
-            saveScreen("guide")
-            compose.onNodeWithContentDescription("돌아가기").performClick()
-            compose.onNodeWithText("빈 교실 측정 시작").assertIsDisplayed()
+            recordEmptyRoom(vm)
+            compose.runOnIdle {
+                val now = System.currentTimeMillis()
+                vm.tracker.update(com.classroom.rfdetector.core.RfObservation("weak", com.classroom.rfdetector.core.ScanSource.BLE,
+                    "보조 신호", -95, null, false, now))
+                vm.tracker.update(com.classroom.rfdetector.core.RfObservation("past", com.classroom.rfdetector.core.ScanSource.BLE,
+                    "이전 신호", -60, null, false, now - 20_000))
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
+            }
+            compose.waitUntil(10_000) { vm.watch.value.supplementaryCount == 1 && vm.watch.value.history.any { it.key == "past" } }
+            assertEquals(0, vm.watch.value.count)
+            compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("조용히 확인할 신호 1개") and hasClickAction())
+            compose.onNode(hasText("조용히 확인할 신호 1개") and hasClickAction()).performClick()
+            compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("보조 신호"))
+            saveScreen("guard-supplementary")
+            compose.onNodeWithText("보조 신호").performClick()
+            compose.onNodeWithText("이 신호 확인함").assertExists()
+            compose.onNodeWithText("목록으로").performClick()
+            compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("최근 놓친 신호 1개"))
+            compose.onNodeWithText("최근 놓친 신호 1개").performClick()
+            compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("이전 신호"))
+            saveScreen("guard-recent-history")
+            compose.onNodeWithText("이전 신호").performClick()
+            compose.onNodeWithText("기기 정보 보기").performClick()
+            compose.onNodeWithText("주소").performScrollTo()
+            compose.onNodeWithText("past").assertIsDisplayed()
         } finally { vm.shutdown() }
     }
+
 
     @Test
     @Config(qualifiers = "w320dp-h640dp-mdpi")
@@ -140,12 +165,11 @@ class GuardFlowTest {
             recordEmptyRoom(vm)
             addEarbuds(vm)
             saveScreen("guard-small-found")
-            compose.onNodeWithText("감시 끝내기").assertIsDisplayed()
-            compose.onNodeWithText("빈 교실부터\n다시 측정").assertIsDisplayed()
+            compose.onNodeWithContentDescription("감시 끝내기").assertIsDisplayed()
+            compose.onNodeWithContentDescription("빈 교실 다시 측정").assertIsDisplayed()
         } finally { vm.shutdown() }
     }
 
-    private fun waitForText(text: String) = compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
 
     private fun saveScreen(name: String) {
         val target = File("build/outputs/ui-captures/$name.png")

@@ -48,6 +48,7 @@ class SnapshotStore(private val directory: File) {
                 put("rssi", signal.rssi ?: JSONObject.NULL)
                 put("manufacturer", signal.manufacturer)
                 put("presence", signal.presence.name)
+                put("hidden", signal.hidden)
                 put("manufacturerIds", JSONArray(signal.manufacturerIds.sorted()))
                 put("hints", JSONArray(signal.hints.map { it.name }))
             })
@@ -65,7 +66,8 @@ class SnapshotStore(private val directory: File) {
                 // 이 버전이 모르는 단서 이름은 버린다.
                 row.optJSONArray("hints")?.let { names -> (0 until names.length()).mapNotNull { index ->
                     SignalHint.entries.firstOrNull { it.name == names.getString(index) }
-                }.toSet() } ?: emptySet())
+                }.toSet() } ?: emptySet(),
+                row.optBoolean("hidden", row.getString("source") == ScanSource.WIFI.name && row.getString("name") == "이름 없는 AP"))
         } }
         return SignalSnapshot(json.getString("area"), json.getLong("capturedAtMs"),
             json.getBoolean("simulation"), signals)

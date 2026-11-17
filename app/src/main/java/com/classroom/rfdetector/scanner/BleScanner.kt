@@ -1,13 +1,19 @@
 package com.classroom.rfdetector.scanner
 
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Handler
+import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
+import com.classroom.rfdetector.core.BleAddressType
+import com.classroom.rfdetector.core.ScanHealth
+import com.classroom.rfdetector.core.ScanState
+import com.classroom.rfdetector.core.RssiFilter
 import com.classroom.rfdetector.core.RfObservation
 import com.classroom.rfdetector.core.bleDetails
 import com.classroom.rfdetector.core.bleHints
@@ -19,11 +25,9 @@ class BleScanner(context: Context) {
         (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
     private companion object {
-        /** 실제 기기에서 확인: 필터 없는 탐색은 시작 5분 뒤 시스템이 결과를 거의 주지 않는 모드로 바꾼다. 그 전에 다시 건다. */
+        // Periodic refresh is conservative; silence alone does not prove throttling.
         const val REFRESH_MS = 4 * 60_000L
         const val CHECK_MS = 30_000L
-        /** 받던 신호가 이만큼 끊기면 시스템이 탐색을 낮춘 것으로 보고 바로 다시 건다. */
-        const val SILENT_MS = 30_000L
     }
     private var scanStartedAtElapsedMs = 0L
 
@@ -38,6 +42,18 @@ class BleScanner(context: Context) {
         private set
 
     fun isUsable(): Boolean = try { adapter?.isEnabled == true } catch (_: SecurityException) { false }
+
+    fun health(nowMs: Long): ScanHealth {
+        val error = lastError
+        val received = lastReceivedAtMs
+        return when {
+            error != null -> ScanHealth(ScanState.ERROR, error, received)
+            !active -> ScanHealth(ScanState.STOPPED, "수신 중지", received)
+            received == null -> ScanHealth(ScanState.WAITING, "첫 신호를 기다리는 중")
+            nowMs - received > 15_000L -> ScanHealth(ScanState.WAITING, "최근 신호 없음 · 주변이 조용할 수도 있습니다", received)
+            else -> ScanHealth(ScanState.RECEIVING, "신호 수신 중", received)
+        }
+    }
 
     fun start(onObs: (RfObservation) -> Unit): Boolean {
         stop()
@@ -66,7 +82,7 @@ class BleScanner(context: Context) {
                         key = result.device.address,
                         source = ScanSource.BLE,
                         name = name,
-                        rssi = result.rssi,
+                        rssi = result.rssi.takeIf { RssiFilter.isValid(it.toDouble()) },
                         // AD Tx Power is radiated packet power, not calibrated RSSI at 1m.
                         txPower = null,
                         hidden = false,
@@ -77,6 +93,7 @@ class BleScanner(context: Context) {
                         hints = bleHints(result.scanRecord?.bytes),
                         details = bleDetails(result.scanRecord?.bytes, result.isConnectable, result.isLegacy,
                             result.scanRecord?.txPowerLevel?.takeIf { it != Int.MIN_VALUE }),
+                        addressType = addressType(result.device),
                     )
                 )
             }
@@ -87,9 +104,7 @@ class BleScanner(context: Context) {
 
             override fun onScanFailed(errorCode: Int) {
                 if (callback !== this) return
-                handler.removeCallbacks(refresh)
-                active = false
-                fail("BLE 탐색 오류 ($errorCode) · 잠시 후 다시 시작하세요")
+                fail("블루투스 수신 오류 ($errorCode) · 설정을 확인한 뒤 다시 시작하세요")
             }
         }
         return try {
@@ -117,12 +132,11 @@ class BleScanner(context: Context) {
         .setPhy(ScanSettings.PHY_LE_ALL_SUPPORTED)
         .build()
 
-    /** Android는 오래 이어진 탐색을 결과가 거의 오지 않는 모드로 낮춘다. 같은 콜백으로 다시 걸어 되돌린다. */
+    /** Refresh periodically as a precaution; a quiet room is not evidence of throttling. */
     private fun checkScan() {
         if (callback == null || !active) return
-        val silentMs = lastReceivedAtMs?.let { System.currentTimeMillis() - it }
         val due = SystemClock.elapsedRealtime() - scanStartedAtElapsedMs >= REFRESH_MS
-        if (due || (silentMs != null && silentMs > SILENT_MS)) refreshScan() else handler.postDelayed(refresh, CHECK_MS)
+        if (due) refreshScan() else handler.postDelayed(refresh, CHECK_MS)
     }
 
     private fun refreshScan() {
@@ -133,7 +147,7 @@ class BleScanner(context: Context) {
             scanner.stopScan(cb)
             scanner.startScan(null, scanSettings(), cb)
             scanStartedAtElapsedMs = SystemClock.elapsedRealtime()
-            handler.postDelayed(refresh, CHECK_MS)
+            if (active) handler.postDelayed(refresh, CHECK_MS)
         } catch (_: SecurityException) {
             fail("BLE 탐색 권한을 확인하세요")
         } catch (_: IllegalStateException) {
@@ -144,6 +158,7 @@ class BleScanner(context: Context) {
     fun stop() {
         handler.removeCallbacks(refresh)
         active = false
+        lastError = null
         val cb = callback ?: return
         callback = null
         val ad = adapter ?: return
@@ -155,8 +170,23 @@ class BleScanner(context: Context) {
     }
 
     private fun fail(message: String): Boolean {
+        stop()
         active = false
         lastError = message
         return false
+    }
+
+    private fun addressType(device: BluetoothDevice): BleAddressType {
+        if (Build.VERSION.SDK_INT < 35) return BleAddressType.UNKNOWN
+        return try {
+            when (device.addressType) {
+                BluetoothDevice.ADDRESS_TYPE_PUBLIC -> BleAddressType.PUBLIC
+                BluetoothDevice.ADDRESS_TYPE_RANDOM -> BleAddressType.RANDOM
+                BluetoothDevice.ADDRESS_TYPE_ANONYMOUS -> BleAddressType.ANONYMOUS
+                else -> BleAddressType.UNKNOWN
+            }
+        } catch (_: SecurityException) {
+            BleAddressType.UNKNOWN
+        }
     }
 }

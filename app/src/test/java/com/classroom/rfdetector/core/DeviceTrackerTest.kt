@@ -102,4 +102,61 @@ class DeviceTrackerTest {
         assertEquals(1, tracker.snapshot(2000).size)
         assertEquals(2, tracker.snapshot(2000).single().observationCount)
     }
+
+    @Test fun invalidLatestRssiKeepsObservationButNotLiveStrength() {
+        for (invalid in listOf(null, 0, 127, -128, 1, 128)) {
+            val tracker = DeviceTracker()
+            tracker.update(observation("device", -40, 1000))
+            tracker.update(observation("device", invalid, 2000).copy(name = "latest"))
+            tracker.update(observation("device", -20, 1500))
+            val record = tracker.snapshot(2000).single()
+            assertEquals("latest", record.displayName)
+            assertEquals(3, record.observationCount)
+            assertEquals(2000L, record.lastSeenMs)
+            assertEquals(-20, record.peakRssi)
+            assertNull(record.rssiEma)
+            assertEquals(DistanceClass.UNKNOWN, record.distanceClass)
+            tracker.update(observation("device", -80, 3000))
+            assertEquals(-80.0, tracker.snapshot(3000).single().rssiEma!!, 0.001)
+        }
+    }
+
+    @Test fun invalidFirstRssiNeverBecomesPeakOrStrength() {
+        for (invalid in listOf(null, 0, 127, -128, 1)) {
+            val tracker = DeviceTracker()
+            tracker.update(observation("device", invalid))
+            val record = tracker.snapshot(1000).single()
+            assertEquals(1, record.observationCount)
+            assertNull(record.peakRssi)
+            assertNull(record.rssiEma)
+            assertEquals(DistanceClass.UNKNOWN, record.distanceClass)
+        }
+    }
+
+    @Test fun addressTypeFollowsLatestObservationWithoutCrossingRadios() {
+        val tracker = DeviceTracker()
+        tracker.update(observation("00:11:22:33:44:55", -60, 2000).copy(addressType = BleAddressType.RANDOM))
+        tracker.update(observation("00:11:22:33:44:55", -60, 1000).copy(addressType = BleAddressType.PUBLIC))
+        tracker.update(observation("00:11:22:33:44:55", -60, 2000).copy(source = ScanSource.WIFI))
+        val devices = tracker.snapshot(2000).associateBy { it.source }
+        assertEquals(BleAddressType.RANDOM, devices.getValue(ScanSource.BLE).addressType)
+        assertEquals(BleAddressType.UNKNOWN, devices.getValue(ScanSource.WIFI).addressType)
+    }
+
+    @Test fun wifiNamesAreStoredExactly() {
+        val tracker = DeviceTracker()
+        tracker.update(observation("wifi", -60).copy(source = ScanSource.WIFI, name = "  Lab  "))
+        assertEquals("  Lab  ", tracker.snapshot(1000).single().displayName)
+        tracker.update(observation("wifi", -60, 2000).copy(source = ScanSource.WIFI, name = " "))
+        assertEquals(" ", tracker.snapshot(2000).single().displayName)
+    }
+
+    @Test fun latestHiddenWifiDoesNotReuseAnEarlierSsid() {
+        val tracker = DeviceTracker()
+        tracker.update(observation("ap", -60).copy(source = ScanSource.WIFI, name = "SCHOOL"))
+        tracker.update(observation("ap", -60, 2000).copy(source = ScanSource.WIFI, name = null, hidden = true))
+        val device = tracker.snapshot(2000).single()
+        assertTrue(device.hidden)
+        assertNotEquals("SCHOOL", device.displayName)
+    }
 }

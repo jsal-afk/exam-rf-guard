@@ -5,6 +5,8 @@ import java.util.Locale
 /** 관측 출처 */
 enum class ScanSource { BLE, WIFI }
 
+enum class BleAddressType { UNKNOWN, PUBLIC, RANDOM, ANONYMOUS }
+
 fun radioKey(source: ScanSource, address: String): String = "${source.name}:${address.uppercase(Locale.ROOT)}"
 
 enum class SignalPresence {
@@ -17,13 +19,13 @@ enum class SignalPresence {
 data class ScanSession(val id: String, val startedAtMs: Long, val area: String,
     val pauses: Int = 0, val pausedMs: Long = 0)
 
-/** 거리 등급 — RSSI 기반 추정이며 실제 거리 측정이 아니다. */
+/** RSSI 기반 신호 강도 등급이며 실제 거리 측정이 아니다. */
 enum class DistanceClass(val label: String) {
-    VERY_CLOSE("바로 옆"),
-    CLOSE("가까움"),
+    VERY_CLOSE("매우 강함"),
+    CLOSE("강함"),
     NEAR("중간"),
-    FAR("멀다"),
-    UNKNOWN("측정 중"),
+    FAR("약함"),
+    UNKNOWN("측정 안 됨"),
 }
 
 /** 스캐너/시뮬레이터가 올리는 단일 관측값 */
@@ -38,6 +40,7 @@ data class RfObservation(
     val manufacturerIds: Set<Int> = emptySet(),
     val hints: Set<SignalHint> = emptySet(),
     val details: Map<String, String> = emptyMap(),
+    val addressType: BleAddressType = BleAddressType.UNKNOWN,
 ) {
     val trackingKey: String get() = radioKey(source, key)
 }
@@ -63,6 +66,7 @@ data class TrackedDevice(
     val hints: Set<SignalHint> = emptySet(),
     /** 기기가 알린 나머지 정보(항목 → 값). 화면 표시용이며 저장하지 않는다. */
     val details: Map<String, String> = emptyMap(),
+    val addressType: BleAddressType = BleAddressType.UNKNOWN,
 ) {
     val trackingKey: String get() = radioKey(source, key)
 }

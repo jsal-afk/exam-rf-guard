@@ -11,12 +11,12 @@ enum class SignalHint(val label: String) {
     WATCH("스마트워치"),
     HEARING_AID("보청기"),
     PHONE("휴대폰"),
-    APPLE_ACTIVE("켜져 있는 Apple 기기 · 아이폰·아이패드·워치 등"),
+    APPLE_ACTIVE("Apple 기기 광고 후보"),
     COMPUTER("노트북·컴퓨터"),
     WINDOWS("Windows 기기"),
     FAST_PAIR("블루투스 액세서리 · 이어폰 등"),
     TAG("위치 추적 태그"),
-    APPLE_FIND_MY("나의 찾기 신호 · 에어태그나 꺼 둔 Apple 기기"),
+    APPLE_FIND_MY("나의 찾기 형식 광고 후보"),
     BEACON("고정 비콘"),
     HOTSPOT("휴대폰 핫스팟 후보"),
     WIFI_DIRECT("Wi-Fi Direct 기기 · 휴대폰·프린터 등"),
@@ -26,7 +26,13 @@ val Set<SignalHint>.primary: SignalHint? get() = minByOrNull { it.ordinal }
 
 private const val APPLE = 0x004C
 private const val MICROSOFT = 0x0006
-private const val FAST_PAIR_UUID = 0xFE2C
+private fun serviceHint(uuid: Int): SignalHint? = when (uuid) {
+    0xFE2C -> SignalHint.FAST_PAIR
+    0xFDF0 -> SignalHint.HEARING_AID
+    0xFEED -> SignalHint.TAG
+    0xFEAA -> SignalHint.BEACON
+    else -> null
+}
 
 /** BLE 광고 원본(AD 구조 나열)에서 Appearance, 서비스 UUID, 제조사 데이터를 읽는다. 잘린 구조는 무시한다. */
 fun bleHints(advertisement: ByteArray?): Set<SignalHint> {
@@ -49,8 +55,8 @@ fun bleHints(advertisement: ByteArray?): Set<SignalHint> {
                 0x25 -> hints += SignalHint.EARPHONES
                 0x29 -> hints += SignalHint.HEARING_AID
             }
-            0x02, 0x03 -> if ((0 until data.size - 1 step 2).any { u16(it) == FAST_PAIR_UUID }) hints += SignalHint.FAST_PAIR
-            0x16 -> if (data.size >= 2 && u16(0) == FAST_PAIR_UUID) hints += SignalHint.FAST_PAIR
+            0x02, 0x03 -> (0 until data.size - 1 step 2).forEach { serviceHint(u16(it))?.let(hints::add) }
+            0x16 -> if (data.size >= 2) serviceHint(u16(0))?.let(hints::add)
             0xFF -> if (data.size >= 3) when (u16(0)) {
                 APPLE -> hints += appleHints(data.copyOfRange(2, data.size))
                 MICROSOFT -> if (data[2].toInt() == 0x01) hints += SignalHint.WINDOWS
@@ -66,13 +72,15 @@ private fun appleHints(payload: ByteArray): Set<SignalHint> {
     val hints = mutableSetOf<SignalHint>()
     var index = 0
     while (index + 1 < payload.size) {
+        val length = payload[index + 1].toInt() and 0xFF
+        if (index + 2 + length > payload.size) break
         when (payload[index].toInt() and 0xFF) {
             0x02 -> hints += SignalHint.BEACON
             0x07 -> hints += SignalHint.APPLE_AUDIO
             0x05, 0x0C, 0x0E, 0x0F, 0x10 -> hints += SignalHint.APPLE_ACTIVE
-            0x12 -> hints += SignalHint.APPLE_FIND_MY
+            0x12 -> if (length == 0x19) hints += SignalHint.APPLE_FIND_MY
         }
-        index += 2 + (payload[index + 1].toInt() and 0xFF)
+        index += 2 + length
     }
     return hints
 }

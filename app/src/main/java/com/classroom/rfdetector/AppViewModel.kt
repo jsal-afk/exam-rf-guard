@@ -3,6 +3,7 @@ package com.classroom.rfdetector
 import android.content.Context
 import android.location.LocationManager
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.ViewModel
@@ -15,13 +16,11 @@ import com.classroom.rfdetector.core.ScanSession
 import com.classroom.rfdetector.core.SignalPresence
 import com.classroom.rfdetector.core.SignalSnapshot
 import com.classroom.rfdetector.core.SilentMode
-import com.classroom.rfdetector.core.SnapshotSignal
 import com.classroom.rfdetector.core.SnapshotStore
 import com.classroom.rfdetector.core.TrackedDevice
 import com.classroom.rfdetector.core.WatchView
-import com.classroom.rfdetector.core.baselineGroupCounts
-import com.classroom.rfdetector.core.baselineSamples
-import com.classroom.rfdetector.core.baselineWifiAddresses
+import com.classroom.rfdetector.core.ScanHealth
+import com.classroom.rfdetector.core.ScanState
 import com.classroom.rfdetector.core.watchView
 import com.classroom.rfdetector.scanner.BleScanner
 import com.classroom.rfdetector.scanner.WifiScanner
@@ -70,6 +69,10 @@ class AppViewModel(private val app: Context) : ViewModel() {
     val geigerOn = MutableStateFlow(false)
     val scanSession = MutableStateFlow<ScanSession?>(null)
     val healthTick = MutableStateFlow(0L)
+    val bleHealth = MutableStateFlow(ScanHealth(ScanState.STOPPED, "블루투스 수신 중지"))
+    val wifiHealth = MutableStateFlow(ScanHealth(ScanState.STOPPED, "와이파이 수신 중지"))
+    val collectionMs = MutableStateFlow(0L)
+    private var lastCollectionTickMs = 0L
 
     /** 지금 감시에 쓰는 빈 교실 기록. null이면 아직 측정 전이다. */
     val baselineSnapshot = MutableStateFlow<SignalSnapshot?>(null)
@@ -79,9 +82,6 @@ class AppViewModel(private val app: Context) : ViewModel() {
     val snapshotBusy = MutableStateFlow(true)
     val snapshotError = MutableStateFlow<String?>(null)
     private val snapshotStore = SnapshotStore(app.filesDir)
-    private var baselineGroups: Map<String, Int> = emptyMap()
-    private var baselineWifi: Set<String> = emptySet()
-    private var baselineSamples: List<SnapshotSignal> = emptyList()
 
     /** 빈 교실 기록과 비교해 지금 잡히는 전파를 묶음으로 나눈 결과. */
     val watch = MutableStateFlow(WatchView())
@@ -89,7 +89,7 @@ class AppViewModel(private val app: Context) : ViewModel() {
     private var problemsCheckedAtMs = 0L
     /** 위치 찾기 대상(trackingKey). 지정하면 근접 진동이 이 기기를 따른다. */
     val findTarget = MutableStateFlow<String?>(null)
-    /** 감독관이 "확인함"으로 표시한 묶음(groupKey). 이번 감시 동안만 유지한다. */
+    /** 확인은 이 주소의 관측에만 적용한다. 같은 이름의 새 주소까지 숨기지 않는다. */
     val acknowledged = MutableStateFlow<Set<String>>(emptySet())
     private var pausedAtMs: Long? = null
     private val silent = SilentMode(app)
@@ -162,6 +162,7 @@ class AppViewModel(private val app: Context) : ViewModel() {
                 pausedMs = paused.pausedMs + (System.currentTimeMillis() - resumedPauseAtMs!!).coerceAtLeast(0))
         } else {
             acknowledged.value = emptySet()
+            collectionMs.value = 0L
             tracker.clear()
             _devices.value = emptyList()
             watch.value = WatchView()
@@ -169,6 +170,7 @@ class AppViewModel(private val app: Context) : ViewModel() {
         }
         applyBaseline()
         scanning.value = true
+        lastCollectionTickMs = SystemClock.elapsedRealtime()
         checkExamMode()
         if (simMode.value) {
             if (paused == null) sim.reset()
@@ -215,20 +217,25 @@ class AppViewModel(private val app: Context) : ViewModel() {
         ble.stop()
         wifi.stop()
         if (geigerOn.value) setGeiger(false)
+        updateScanHealth(System.currentTimeMillis())
     }
 
     private fun applyBaseline() {
         val baseline = baselineSnapshot.value?.takeIf { scanSession.value != null && it.simulation == simMode.value }
         baselineSet.value = baseline != null
-        baselineGroups = baseline?.let(::baselineGroupCounts) ?: emptyMap()
-        baselineWifi = baseline?.let(::baselineWifiAddresses) ?: emptySet()
-        baselineSamples = baseline?.let { baselineSamples(it) } ?: emptyList()
     }
+
+    fun canSaveBaseline(): Boolean = scanning.value && !snapshotBusy.value && (simMode.value ||
+        (collectionMs.value >= 120_000L && wifi.completedScans >= 2 && collectionRunning()))
+
+    private fun collectionRunning(): Boolean = ble.active && wifi.active &&
+        problems.value.isEmpty() && ble.lastError == null && wifi.lastError == null &&
+        wifi.health(System.currentTimeMillis()).state == ScanState.COMPLETED
 
     /** 지금까지 잡힌 전파 전부를 이 교실에 원래 있던 것으로 저장하고 감시를 시작한다. */
     fun takeBaseline() {
         val session = scanSession.value ?: return
-        if (!scanning.value || snapshotBusy.value || devices.value.isEmpty()) return
+        if (!canSaveBaseline()) return
         refresh()
         val snapshot = SignalSnapshot.capture(session.area, System.currentTimeMillis(), simMode.value, devices.value)
         snapshotBusy.value = true
@@ -274,9 +281,23 @@ class AppViewModel(private val app: Context) : ViewModel() {
         startScan()
     }
 
-    fun acknowledge(groupKey: String) {
-        acknowledged.value += groupKey
-        refresh() // 다음 갱신 주기를 기다리지 않고 목록에서 바로 뺀다.
+    fun acknowledge(trackingKey: String) {
+        if (devices.value.none { it.trackingKey == trackingKey }) return
+        acknowledged.value += trackingKey
+        refresh()
+    }
+
+    fun undoAcknowledge(trackingKey: String) {
+        acknowledged.value -= trackingKey
+        refresh()
+    }
+
+    /** 자동 재시도 대신 감독관이 상태를 확인한 뒤 수신만 다시 시작한다. */
+    fun restartRadios() {
+        if (!scanning.value || simMode.value) return
+        ble.start(::onObservation)
+        wifi.start(::onObservation)
+        refresh()
     }
 
     fun setGeiger(on: Boolean) {
@@ -304,18 +325,36 @@ class AppViewModel(private val app: Context) : ViewModel() {
         val now = System.currentTimeMillis()
         healthTick.value = now
         val list = tracker.snapshot(now, includeInactive = true).map { d ->
-            d.copy(identity = identityResolver.resolve(d.key, d.displayName, setOf(d.source), d.manufacturerIds))
+            d.copy(identity = identityResolver.resolve(d.key, d.displayName, setOf(d.source), d.manufacturerIds, d.addressType))
         }
         _devices.value = list
-        val view = if (baselineSet.value) watchView(list, baselineGroups, acknowledged.value, now, baselineWifi, baselineSamples) else WatchView()
+        val view = baselineSnapshot.value?.takeIf { baselineSet.value }?.let {
+            watchView(list, it, acknowledged.value, now)
+        } ?: WatchView()
         watch.value = view
         geiger.setClass(list.firstOrNull { it.trackingKey == findTarget.value && it.presence == SignalPresence.RECENT }?.distanceClass ?: DistanceClass.UNKNOWN)
+        updateScanHealth(now)
+        val elapsed = SystemClock.elapsedRealtime()
+        if (scanning.value && !baselineSet.value && (simMode.value || collectionRunning())) {
+            collectionMs.value += (elapsed - lastCollectionTickMs).coerceAtLeast(0)
+        }
+        lastCollectionTickMs = elapsed
         // 설정 상태 확인은 1초에 한 번이면 충분하다.
         if (now - problemsCheckedAtMs >= 1_000) {
             problemsCheckedAtMs = now
             checkExamMode()
             // 감시 도중에 블루투스를 켠 경우 바로 받기 시작한다. 오류로 멈춘 탐색은 자동으로 되풀이하지 않는다.
             if (scanning.value && !simMode.value && !ble.active && ble.lastError == null && ble.isUsable()) ble.start(::onObservation)
+        }
+    }
+
+    private fun updateScanHealth(nowMs: Long) {
+        if (scanning.value && simMode.value) {
+            bleHealth.value = ScanHealth(ScanState.RECEIVING, "가상 블루투스 수신 중", nowMs)
+            wifiHealth.value = ScanHealth(ScanState.COMPLETED, "가상 와이파이 갱신 완료", nowMs)
+        } else {
+            bleHealth.value = ble.health(nowMs)
+            wifiHealth.value = wifi.health(nowMs)
         }
     }
 

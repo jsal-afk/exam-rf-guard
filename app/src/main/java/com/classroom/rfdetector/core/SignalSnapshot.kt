@@ -10,6 +10,7 @@ data class SnapshotSignal(
     val presence: SignalPresence = SignalPresence.RECENT,
     val manufacturerIds: Set<Int> = emptySet(),
     val hints: Set<SignalHint> = emptySet(),
+    val hidden: Boolean = source == ScanSource.WIFI && name == "이름 없는 AP",
 )
 
 data class SignalSnapshot(
@@ -23,7 +24,7 @@ data class SignalSnapshot(
             val signals = devices.map { device ->
                     SnapshotSignal(device.key, device.source, device.displayName, device.rssiEma,
                         device.identity.summary, device.presence, device.manufacturerIds.toSet(),
-                        device.hints.toSet())
+                        device.hints.toSet(), device.hidden)
             }
             return SignalSnapshot(area.trim(), capturedAtMs, simulation, signals)
         }

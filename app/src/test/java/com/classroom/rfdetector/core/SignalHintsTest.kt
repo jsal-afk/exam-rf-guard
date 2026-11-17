@@ -15,6 +15,8 @@ class SignalHintsTest {
 
     private fun ad(type: Int, vararg data: Int) = byteArrayOf((data.size + 1).toByte(), type.toByte()) + data.map { it.toByte() }
     private val flags = ad(0x01, 0x06)
+    // 상태 1바이트, 공개키 조각 22바이트, 키 상위 비트와 hint 각 1바이트의 합성 형식.
+    private val findMyFrame = ad(0xFF, *(listOf(0x4C, 0x00, 0x12, 0x19, 0x10) + (1..22) + listOf(0, 0)).toIntArray())
 
     @Test fun appearanceCategoryNamesTheDeviceKind() {
         assertEquals(setOf(SignalHint.WATCH), bleHints(flags + ad(0x19, 0xC1, 0x00)))
@@ -29,7 +31,7 @@ class SignalHintsTest {
         // Handoff(0x0C) 뒤에 Nearby Info(0x10)가 이어지는 켜진 아이폰의 광고
         assertEquals(setOf(SignalHint.APPLE_ACTIVE), bleHints(flags + ad(0xFF, 0x4C, 0x00, 0x0C, 0x02, 0xAA, 0xBB, 0x10, 0x02, 0x01, 0x18)))
         assertEquals(setOf(SignalHint.APPLE_AUDIO), bleHints(ad(0xFF, 0x4C, 0x00, 0x07, 0x02, 0x01, 0x02)))
-        assertEquals(setOf(SignalHint.APPLE_FIND_MY), bleHints(ad(0xFF, 0x4C, 0x00, 0x12, 0x02, 0x00, 0x00)))
+        assertEquals(setOf(SignalHint.APPLE_FIND_MY), bleHints(findMyFrame))
         // 다른 회사가 같은 종류 바이트를 써도 Apple로 읽지 않는다.
         assertEquals(emptySet<SignalHint>(), bleHints(ad(0xFF, 0x75, 0x00, 0x10, 0x02, 0x01, 0x18)))
     }
@@ -49,6 +51,26 @@ class SignalHintsTest {
         assertEquals(emptySet<SignalHint>(), bleHints(byteArrayOf(9, 0x19, 0xC1.toByte())))
         assertEquals(emptySet<SignalHint>(), bleHints(byteArrayOf(2, 0xFF.toByte(), 0x4C)))
         assertEquals(emptySet<SignalHint>(), bleHints(ad(0xFF, 0x4C, 0x00, 0x10)))
+    }
+
+    @Test fun malformedAppleInnerLengthDoesNotProduceFindMy() {
+        assertTrue(bleHints(ad(0xFF, 0x4C, 0x00, 0x12, 0x08, 0x01)).isEmpty())
+        val compound = ad(0xFF, 0x4C, 0x00, 0x10, 0x01, 0x01, 0x12, 0x04, 0x01)
+        assertEquals(setOf(SignalHint.APPLE_ACTIVE), bleHints(compound))
+    }
+
+    @Test fun findMyRequiresTheKnownCompleteBodyShape() {
+        for (length in listOf(0, 1, 2, 24, 26)) {
+            val data = listOf(0x4C, 0, 0x12, length) + List(length) { 1 }
+            assertFalse(bleHints(ad(0xFF, *data.toIntArray())).contains(SignalHint.APPLE_FIND_MY))
+        }
+        assertFalse(bleHints(findMyFrame.dropLast(1).toByteArray()).contains(SignalHint.APPLE_FIND_MY))
+        assertTrue(bleHints(findMyFrame).contains(SignalHint.APPLE_FIND_MY))
+    }
+
+    @Test fun multipleAdvertisedCluesRemainIndependent() {
+        val bytes = ad(0x19, 0xC1, 0x00) + ad(0x03, 0xF0, 0xFD, 0xED, 0xFE, 0xAA, 0xFE) + findMyFrame
+        assertEquals(setOf(SignalHint.WATCH, SignalHint.HEARING_AID, SignalHint.TAG, SignalHint.BEACON, SignalHint.APPLE_FIND_MY), bleHints(bytes))
     }
 
     @Test fun phoneHotspotAndWifiDirectNamesAreCandidatesOnly() {

@@ -55,4 +55,17 @@ class SnapshotStoreTest {
         File(directory.root, "signal-snapshots.json").writeText("{\"version\":99,\"snapshots\":[]}")
         SnapshotStore(directory.root).load()
     }
+
+    @Test fun hiddenAndLiteralWifiNamesRemainDistinctAfterReopening() {
+        val signals = listOf(
+            SnapshotSignal("hidden", ScanSource.WIFI, "이름 없는 AP", -60.0, "unknown", hidden = true),
+            SnapshotSignal("literal", ScanSource.WIFI, "이름 없는 AP", -60.0, "unknown", hidden = false),
+            SnapshotSignal("spaces", ScanSource.WIFI, " SCHOOL ", -60.0, "unknown", hidden = false),
+        )
+        val snapshot = SignalSnapshot("A", 1_000, false, signals)
+        SnapshotStore(directory.root).save(listOf(snapshot))
+        val loaded = SnapshotStore(directory.root).load().single()
+        assertEquals(signals, loaded.signals)
+        assertNotEquals(loaded.signals[0].groupKey, loaded.signals[1].groupKey)
+    }
 }
