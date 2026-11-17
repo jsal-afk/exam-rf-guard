@@ -153,20 +153,20 @@ fun GuardScreen(vm: AppViewModel, permissionMissing: Boolean, onStart: () -> Uni
                     item {
                         val incomplete = watching && (problems.isNotEmpty() || listOf(bleHealth, wifiHealth).any { it.state == ScanState.ERROR || it.state == ScanState.STOPPED })
                         val waiting = watching && listOf(bleHealth, wifiHealth).any { it.state == ScanState.WAITING }
-                        Surface(color = if (!watching || incomplete || waiting) RfColors.surfaceAlt else if (found) warnDim else okDim, shape = RoundedCornerShape(20.dp)) {
+                        Surface(color = if (!watching) RfColors.surfaceAlt else if (found) warnDim else if (incomplete || waiting) RfColors.surfaceAlt else okDim, shape = RoundedCornerShape(20.dp)) {
                             Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                                     val accent = if (!watching) RfColors.textDim else if (found || incomplete || waiting) RfColors.warning else RfColors.ok
                                     Box(Modifier.size(48.dp).background(accent, CircleShape), contentAlignment = Alignment.Center) {
-                                        if (incomplete || waiting) Text("!", color = RfColors.bg, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineSmall)
-                                        else if (watching && found) Text("${watch.count}", color = RfColors.bg, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineSmall)
+                                        if (watching && found) Text("${watch.count}", color = RfColors.bg, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineSmall)
+                                        else if (incomplete || waiting) Text("!", color = RfColors.bg, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineSmall)
                                         else RfGlyph(RfSymbol.CHECK, size = 28.dp, color = RfColors.bg)
                                     }
                                     Text(when {
                                         !watching -> "감시를 끝냈습니다"
+                                        found -> "새 신호 ${watch.count}개"
                                         incomplete -> "감시가 완전하지 않습니다"
                                         waiting -> "수신을 기다리는 중입니다"
-                                        found -> "새 전파 ${watch.count}개 발견"
                                         else -> "새 전파 없음"
                                     }, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = if (watching) accent else RfColors.textPrimary)
                                 }
