@@ -24,6 +24,7 @@ import com.classroom.rfdetector.core.baselineSamples
 import com.classroom.rfdetector.core.baselineWifiAddresses
 import com.classroom.rfdetector.core.groupKey
 import com.classroom.rfdetector.core.acknowledgeKey
+import com.classroom.rfdetector.core.WEAK_SIGNAL_DBM
 import com.classroom.rfdetector.core.watchView
 import com.classroom.rfdetector.scanner.BleScanner
 import com.classroom.rfdetector.scanner.WifiScanner
@@ -105,11 +106,16 @@ class AppViewModel(private val app: Context, private val nowMs: () -> Long = Sys
     private fun retainSurveyCandidates(view: WatchView) {
         if (!surveyOpen || !scanning.value) return
         val retained = surveyNotices.value.associateByTo(LinkedHashMap()) { it.acknowledgeKey }
+        val seen = HashSet<String>()
         (view.wifi + view.bluetooth).forEach { group ->
-            val device = group.strongest
-            if (device.lastSeenMs >= surveyCaptureAfterMs) {
-                retained[device.acknowledgeKey] = device
-                while (retained.size > surveyNoticeLimit) retained.remove(retained.keys.first())
+            group.devices.forEach { device ->
+                if (device.lastSeenMs >= surveyCaptureAfterMs && (device.rssiEma ?: -127.0) >= WEAK_SIGNAL_DBM) {
+                    val key = device.acknowledgeKey
+                    if (seen.add(key)) {
+                        retained[key] = device
+                        while (retained.size > surveyNoticeLimit) retained.remove(retained.keys.first())
+                    }
+                }
             }
         }
         surveyNotices.value = retained.values.toList()

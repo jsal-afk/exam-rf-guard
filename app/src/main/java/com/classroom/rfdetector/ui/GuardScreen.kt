@@ -184,8 +184,8 @@ fun GuardScreen(vm: AppViewModel, permissionMissing: Boolean, onStart: () -> Uni
                     if (surveyNotices.isNotEmpty()) {
                         item {
                             GuardPanel {
-                                Text("비교 중 발견한 후보 기록 ${surveyNotices.size}종", fontWeight = FontWeight.Bold)
-                                Text("현재 경고 수와 별도로, 각 후보 묶음의 대표를 최대 50종까지 임시로 보관합니다.", color = RfColors.textDim)
+                                Text("비교 중 발견한 후보 기록 ${surveyNotices.size}개", fontWeight = FontWeight.Bold)
+                                Text("현재 경고 수와 별도로, 기존 확인 기준에 따라 최대 50개까지 임시로 보관합니다.", color = RfColors.textDim)
                                 surveyNotices.forEach { notice ->
                                     val current = watching && devices.any {
                                         it.trackingKey == notice.trackingKey && it.presence == SignalPresence.RECENT
