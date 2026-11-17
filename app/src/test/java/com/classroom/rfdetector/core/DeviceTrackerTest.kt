@@ -102,4 +102,24 @@ class DeviceTrackerTest {
         assertEquals(1, tracker.snapshot(2000).size)
         assertEquals(2, tracker.snapshot(2000).single().observationCount)
     }
+
+    @Test fun unknownRssiSentinelIsCountedButNotUsedAsStrength() {
+        val tracker = DeviceTracker()
+        tracker.update(observation("ble", -78, 1000))
+        tracker.update(observation("ble", 127, 1100))
+        tracker.update(observation("ble", -80, 1200))
+        val device = tracker.snapshot(1200).single()
+        assertEquals(3, device.observationCount)
+        assertEquals(-78, device.peakRssi)
+        assertTrue(device.rssiEma!! < -77)
+    }
+
+    @Test fun onlyUnknownRssiLeavesStrengthUnknown() {
+        val tracker = DeviceTracker()
+        tracker.update(observation("ble", 127))
+        val device = tracker.snapshot(1000).single()
+        assertNull(device.peakRssi)
+        assertNull(device.rssiEma)
+        assertEquals(DistanceClass.UNKNOWN, device.distanceClass)
+    }
 }
